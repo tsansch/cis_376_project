@@ -1,104 +1,107 @@
+
 # Program Name:    member_manager.py
 # Programmer Name: Era Shkembi
-# Description:     Handles member validation and CRUD record management
-#                  for the ChocAn data center system.
+# Description:     Manages member validation and CRUD record management
+#                  for the ChocAn system using the SQLite database (chocan.db).
 # Date Created:    April 2026
  
-import json
-import os
- 
-MEMBERS_FILE = "members.json"
+from database.db_setup import get_connection
  
  
-# Description:   Load all member records from the JSON data file.
-# Pre-condition:  members.json should exist in the working directory.
-# Post-condition: Returns a dict of member records keyed by member number,
-#                 or an empty dict if the file does not exist.
-def load_members():
-    if not os.path.exists(MEMBERS_FILE):
-        return {}
-    with open(MEMBERS_FILE, "r") as f:
-        return json.load(f)
- 
- 
-# Description:   Persist the member records dict to the JSON data file.
-# Pre-condition:  members is a valid dict of member record dicts.
-# Post-condition: members.json is overwritten with the current records.
-def save_members(members):
-    with open(MEMBERS_FILE, "w") as f:
-        json.dump(members, f, indent=4)
- 
- 
-# Description:   Validate a member number against stored records and status.
-# Pre-condition:  member_number is a string provided by the caller.
+# Description:   Validate a member number against the database.
+# Pre-condition:  member_no is a string entered by the provider terminal.
 # Post-condition: Returns "Validated", "Member suspended", or "Invalid number".
-def validate_member(member_number):
-    if not member_number.isdigit() or len(member_number) != 9:
+def validate_member(member_no):
+    if not str(member_no).isdigit() or len(str(member_no)) != 9:
         return "Invalid number"
-    members = load_members()
-    if member_number not in members:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT status FROM member WHERE member_no = ?", (int(member_no),))
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
         return "Invalid number"
-    if members[member_number].get("status") == "suspended":
+    if row[0] == "SUSPENDED":
         return "Member suspended"
     return "Validated"
  
  
-# Description:   Add a new member record to the data file.
-# Pre-condition:  member_number is a 9-digit string not already in the file;
-#                 all other fields are non-empty strings.
-# Post-condition: New member is saved; returns True on success, False otherwise.
-def add_member(member_number, name, address, city, state, zip_code, status="active"):
-    if not member_number.isdigit() or len(member_number) != 9:
+# Description:   Add a new member record to the database.
+# Pre-condition:  member_no is a 9-digit integer not already in the database;
+#                 fname, lname, street_address, city are non-empty strings;
+#                 state is exactly 2 letters; zip is exactly 5 digits.
+# Post-condition: New member row is inserted; returns True on success, False otherwise.
+def add_member(member_no, fname, lname, street_address, city, state, zip_code, status="ACTIVE"):
+    if not str(member_no).isdigit() or len(str(member_no)) != 9:
         print("Error: Member number must be exactly 9 digits.")
         return False
-    members = load_members()
-    if member_number in members:
-        print("Error: Member number already exists.")
+    if len(state) != 2:
+        print("Error: State must be exactly 2 letters.")
         return False
-    members[member_number] = {
-        "name": name, "address": address, "city": city,
-        "state": state, "zip_code": zip_code, "status": status
-    }
-    save_members(members)
-    print(f"Member {member_number} added successfully.")
+    if len(zip_code) != 5 or not zip_code.isdigit():
+        print("Error: ZIP code must be exactly 5 digits.")
+        return False
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT member_no FROM member WHERE member_no = ?", (int(member_no),))
+    if cur.fetchone():
+        print("Error: Member number already exists.")
+        conn.close()
+        return False
+    cur.execute(
+        "INSERT INTO member (member_no, fname, lname, street_address, city, state, zip, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (int(member_no), fname, lname, street_address, city, state.upper(), zip_code, status.upper())
+    )
+    conn.commit()
+    conn.close()
+    print(f"Member {member_no} added successfully.")
     return True
  
  
-# Description:   Update a single field of an existing member record.
-# Pre-condition:  member_number exists in members.json; field is one of the
-#                 valid field names; new_value is a non-empty string.
-# Post-condition: The field is updated and saved; returns True on success.
-def update_member(member_number, field, new_value):
-    members = load_members()
-    if member_number not in members:
-        print("Error: Member not found.")
-        return False
-    valid_fields = ["name", "address", "city", "state", "zip_code", "status"]
+# Description:   Update a single field of an existing member record in the database.
+# Pre-condition:  member_no exists in the member table; field is a valid column name;
+#                 new_value satisfies the column CHECK constraint.
+# Post-condition: The field is updated in the database; returns True on success.
+def update_member(member_no, field, new_value):
+    valid_fields = ["fname", "lname", "street_address", "city", "state", "zip", "status"]
     if field not in valid_fields:
         print(f"Error: Invalid field '{field}'.")
         return False
-    members[member_number][field] = new_value
-    save_members(members)
-    print(f"Member {member_number} updated: {field} = {new_value}")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT member_no FROM member WHERE member_no = ?", (int(member_no),))
+    if not cur.fetchone():
+        print("Error: Member not found.")
+        conn.close()
+        return False
+    cur.execute(f"UPDATE member SET {field} = ? WHERE member_no = ?", (new_value, int(member_no)))
+    conn.commit()
+    conn.close()
+    print(f"Member {member_no} updated: {field} = {new_value}")
     return True
  
  
-# Description:   Delete a member record from the data file.
-# Pre-condition:  member_number must exist in members.json.
-# Post-condition: Member is removed and file is saved; returns True on success.
-def delete_member(member_number):
-    members = load_members()
-    if member_number not in members:
+# Description:   Delete a member record from the database.
+# Pre-condition:  member_no must exist in the member table.
+# Post-condition: Member row is removed; returns True on success, False if not found.
+def delete_member(member_no):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT member_no FROM member WHERE member_no = ?", (int(member_no),))
+    if not cur.fetchone():
         print("Error: Member not found.")
+        conn.close()
         return False
-    del members[member_number]
-    save_members(members)
-    print(f"Member {member_number} deleted successfully.")
+    cur.execute("DELETE FROM member WHERE member_no = ?", (int(member_no),))
+    conn.commit()
+    conn.close()
+    print(f"Member {member_no} deleted successfully.")
     return True
  
  
 # Description:   Interactive terminal menu for all member management operations.
-# Pre-condition:  None; all data comes from user input at runtime.
+# Pre-condition:  Database must be initialized via database.init_db() before use.
 # Post-condition: Performs the chosen operation and loops until user exits.
 def member_management_menu():
     while True:
@@ -114,14 +117,16 @@ def member_management_menu():
             print(validate_member(num))
         elif choice == "2":
             num   = input("Member number (9 digits): ").strip()
-            name  = input("Name: ").strip()
-            addr  = input("Address: ").strip()
+            fname = input("First name: ").strip()
+            lname = input("Last name: ").strip()
+            addr  = input("Street address: ").strip()
             city  = input("City: ").strip()
             state = input("State (2 letters): ").strip()
-            zipc  = input("ZIP code: ").strip()
-            add_member(num, name, addr, city, state, zipc)
+            zipc  = input("ZIP code (5 digits): ").strip()
+            add_member(num, fname, lname, addr, city, state, zipc)
         elif choice == "3":
             num   = input("Member number: ").strip()
+            print("Valid fields: fname, lname, street_address, city, state, zip, status")
             field = input("Field to update: ").strip()
             val   = input("New value: ").strip()
             update_member(num, field, val)
