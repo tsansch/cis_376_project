@@ -1,93 +1,88 @@
 # Program Name:    provider_manager.py
 # Programmer Name: Era Shkembi
-# Description:     Manages provider records (add, update, delete) for the
-#                  ChocAn data center system (UC-5).
-# Date Created:    April 2026
+# Description:     Manages provider CRUD record management for the ChocAn
+#                  system using the SQLite database (chocan.db).
+# Date Created:    April 11 2026
  
-import json
-import os
- 
-PROVIDERS_FILE = "providers.json"
+from database.db_setup import get_connection
  
  
-# Description:   Load all provider records from the JSON data file.
-# Pre-condition:  providers.json should exist in the working directory.
-# Post-condition: Returns a dict of provider records keyed by provider number,
-#                 or an empty dict if the file does not exist.
-def load_providers():
-    if not os.path.exists(PROVIDERS_FILE):
-        return {}
-    with open(PROVIDERS_FILE, "r") as f:
-        return json.load(f)
- 
- 
-# Description:   Persist the provider records dict to the JSON data file.
-# Pre-condition:  providers is a valid dict of provider record dicts.
-# Post-condition: providers.json is overwritten with the current records.
-def save_providers(providers):
-    with open(PROVIDERS_FILE, "w") as f:
-        json.dump(providers, f, indent=4)
- 
- 
-# Description:   Add a new provider record to the data file.
-# Pre-condition:  provider_number is a 9-digit string not already in the file;
-#                 all other fields are non-empty strings.
-# Post-condition: New provider is saved; returns True on success, False otherwise.
-def add_provider(provider_number, name, address, city, state, zip_code):
-    if not provider_number.isdigit() or len(provider_number) != 9:
+# Description:   Add a new provider record to the database.
+# Pre-condition:  provider_no is a 9-digit integer not already in the database;
+#                 name, street_address, city are non-empty strings;
+#                 state is exactly 2 letters; zip is exactly 5 digits.
+# Post-condition: New provider row is inserted; returns True on success, False otherwise.
+def add_provider(provider_no, name, street_address, city, state, zip_code):
+    if not str(provider_no).isdigit() or len(str(provider_no)) != 9:
         print("Error: Provider number must be exactly 9 digits.")
         return False
-    providers = load_providers()
-    if provider_number in providers:
-        print("Error: Provider number already exists.")
+    if len(state) != 2:
+        print("Error: State must be exactly 2 letters.")
         return False
-    providers[provider_number] = {
-        "name": name,
-        "address": address,
-        "city": city,
-        "state": state,
-        "zip_code": zip_code
-    }
-    save_providers(providers)
-    print(f"Provider {provider_number} added successfully.")
+    if len(zip_code) != 5 or not zip_code.isdigit():
+        print("Error: ZIP code must be exactly 5 digits.")
+        return False
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT provider_no FROM provider WHERE provider_no = ?", (int(provider_no),))
+    if cur.fetchone():
+        print("Error: Provider number already exists.")
+        conn.close()
+        return False
+    cur.execute(
+        "INSERT INTO provider (provider_no, name, street_address, city, state, zip) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (int(provider_no), name, street_address, city, state.upper(), zip_code)
+    )
+    conn.commit()
+    conn.close()
+    print(f"Provider {provider_no} added successfully.")
     return True
  
  
-# Description:   Update a single field of an existing provider record.
-# Pre-condition:  provider_number exists in providers.json; field is one of the
-#                 valid field names; new_value is a non-empty string.
-# Post-condition: The field is updated and saved; returns True on success.
-def update_provider(provider_number, field, new_value):
-    providers = load_providers()
-    if provider_number not in providers:
-        print("Error: Provider not found.")
-        return False
-    valid_fields = ["name", "address", "city", "state", "zip_code"]
+# Description:   Update a single field of an existing provider record in the database.
+# Pre-condition:  provider_no exists in the provider table; field is a valid column name;
+#                 new_value satisfies the column CHECK constraint.
+# Post-condition: The field is updated in the database; returns True on success.
+def update_provider(provider_no, field, new_value):
+    valid_fields = ["name", "street_address", "city", "state", "zip"]
     if field not in valid_fields:
         print(f"Error: Invalid field '{field}'.")
         return False
-    providers[provider_number][field] = new_value
-    save_providers(providers)
-    print(f"Provider {provider_number} updated: {field} = {new_value}")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT provider_no FROM provider WHERE provider_no = ?", (int(provider_no),))
+    if not cur.fetchone():
+        print("Error: Provider not found.")
+        conn.close()
+        return False
+    cur.execute(f"UPDATE provider SET {field} = ? WHERE provider_no = ?", (new_value, int(provider_no)))
+    conn.commit()
+    conn.close()
+    print(f"Provider {provider_no} updated: {field} = {new_value}")
     return True
  
  
-# Description:   Delete a provider record from the data file.
-# Pre-condition:  provider_number must exist in providers.json.
-# Post-condition: Provider is removed and file is saved; returns True on success.
-def delete_provider(provider_number):
-    providers = load_providers()
-    if provider_number not in providers:
+# Description:   Delete a provider record from the database.
+# Pre-condition:  provider_no must exist in the provider table.
+# Post-condition: Provider row is removed; returns True on success, False if not found.
+def delete_provider(provider_no):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT provider_no FROM provider WHERE provider_no = ?", (int(provider_no),))
+    if not cur.fetchone():
         print("Error: Provider not found.")
+        conn.close()
         return False
-    del providers[provider_number]
-    save_providers(providers)
-    print(f"Provider {provider_number} deleted successfully.")
+    cur.execute("DELETE FROM provider WHERE provider_no = ?", (int(provider_no),))
+    conn.commit()
+    conn.close()
+    print(f"Provider {provider_no} deleted successfully.")
     return True
  
  
 # Description:   Interactive terminal menu for all provider management operations.
-# Pre-condition:  None; all data comes from user input at runtime.
+# Pre-condition:  Database must be initialized via database.init_db() before use.
 # Post-condition: Performs the chosen operation and loops until user exits.
 def provider_management_menu():
     while True:
@@ -100,13 +95,14 @@ def provider_management_menu():
         if choice == "1":
             num   = input("Provider number (9 digits): ").strip()
             name  = input("Name: ").strip()
-            addr  = input("Address: ").strip()
+            addr  = input("Street address: ").strip()
             city  = input("City: ").strip()
             state = input("State (2 letters): ").strip()
-            zipc  = input("ZIP code: ").strip()
+            zipc  = input("ZIP code (5 digits): ").strip()
             add_provider(num, name, addr, city, state, zipc)
         elif choice == "2":
             num   = input("Provider number: ").strip()
+            print("Valid fields: name, street_address, city, state, zip")
             field = input("Field to update: ").strip()
             val   = input("New value: ").strip()
             update_provider(num, field, val)
@@ -121,3 +117,4 @@ def provider_management_menu():
  
 if __name__ == "__main__":
     provider_management_menu()
+
